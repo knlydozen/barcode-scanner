@@ -1,0 +1,1027 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>バーコードスキャナー</title>
+  <!-- Google Fonts & FontAwesome -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+  <!-- ZXing CDN (Industry standard 1D/2D barcode reader) -->
+  <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+  <!-- Quagga2 CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2/dist/quagga.min.js"></script>
+  <!-- jsQR CDN (QR code decoding fallback) -->
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+
+  <style>
+    :root {
+      --bg-deep: #090d16;
+      --card-bg: rgba(18, 25, 41, 0.95);
+      --border: rgba(255, 255, 255, 0.12);
+      --primary: #3b82f6;
+      --primary-glow: rgba(59, 130, 246, 0.35);
+      --success: #10b981;
+      --success-glow: rgba(16, 185, 129, 0.4);
+      --error: #ef4444;
+      --warning: #f59e0b;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      background: var(--bg-deep);
+      color: var(--text);
+      font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 0.75rem;
+    }
+
+    .app-container {
+      width: 100%;
+      max-width: 480px;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    /* Error Banner */
+    .error-banner {
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      color: #fca5a5;
+      padding: 0.75rem;
+      border-radius: 12px;
+      font-size: 0.82rem;
+      line-height: 1.4;
+      display: none;
+    }
+
+    /* Camera Viewport */
+    .viewport-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      overflow: hidden;
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+      margin-top: 0.25rem;
+    }
+
+    .camera-viewport {
+      position: relative;
+      width: 100%;
+      height: 72vh;
+      min-height: 400px;
+      max-height: 640px;
+      background: #000;
+      overflow: hidden;
+      border-radius: 12px;
+    }
+
+    .camera-viewport video {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100% !important;
+      height: 100% !important;
+      object-fit: cover;
+      z-index: 1;
+    }
+
+    /* Canvas を完全に非表示にして画面干渉を防止 */
+    .camera-viewport canvas {
+      display: none !important;
+      position: absolute !important;
+      width: 0 !important;
+      height: 0 !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+
+    .camera-placeholder {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      color: var(--text-muted);
+      font-size: 0.88rem;
+      background: #020617;
+      text-align: center;
+      padding: 1rem;
+      z-index: 2;
+    }
+
+    /* Reticle & Scanline */
+    .camera-reticle {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 86%;
+      height: 55%;
+      border: 2px solid rgba(56, 189, 248, 0.5);
+      border-radius: 16px;
+      pointer-events: none;
+      z-index: 5;
+      display: none;
+    }
+
+    .camera-reticle.is-active {
+      display: block;
+    }
+
+    .camera-reticle.is-qr {
+      width: 68vw;
+      max-width: 250px;
+      height: 68vw;
+      max-height: 250px;
+      aspect-ratio: 1 / 1;
+      border-radius: 20px;
+    }
+
+    .camera-reticle::before,
+    .camera-reticle::after {
+      content: '';
+      position: absolute;
+      width: 22px;
+      height: 22px;
+      border-color: #38bdf8;
+      border-style: solid;
+    }
+
+    .camera-reticle::before {
+      top: -2px; left: -2px;
+      border-width: 4px 0 0 4px;
+      border-top-left-radius: 16px;
+    }
+
+    .camera-reticle::after {
+      bottom: -2px; right: -2px;
+      border-width: 0 4px 4px 0;
+      border-bottom-right-radius: 16px;
+    }
+
+    .camera-scanline {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, #38bdf8, transparent);
+      box-shadow: 0 0 10px #38bdf8;
+      display: none;
+      z-index: 6;
+    }
+
+    .camera-scanline.is-active {
+      display: block;
+      animation: scanAnim 2s infinite ease-in-out;
+    }
+
+    @keyframes scanAnim {
+      0% { top: 15%; opacity: 0.2; }
+      50% { top: 85%; opacity: 1; }
+      100% { top: 15%; opacity: 0.2; }
+    }
+
+    /* Active Scan Status Badge */
+    .scan-status-badge {
+      position: absolute;
+      bottom: 1.25rem;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(15, 23, 42, 0.78);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      color: #e2e8f0;
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 0.4rem 0.85rem;
+      border-radius: 9999px;
+      display: none;
+      align-items: center;
+      gap: 0.45rem;
+      z-index: 7;
+      white-space: nowrap;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    }
+
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #10b981;
+      box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+      animation: pulseAnim 1.6s infinite;
+    }
+
+    @keyframes pulseAnim {
+      0% {
+        transform: scale(0.95);
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+      }
+      70% {
+        transform: scale(1);
+        box-shadow: 0 0 0 7px rgba(16, 185, 129, 0);
+      }
+      100% {
+        transform: scale(0.95);
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+      }
+    }
+
+    /* Success Flash */
+    .flash-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(16, 185, 129, 0.45);
+      opacity: 0;
+      pointer-events: none;
+      z-index: 8;
+      transition: opacity 0.15s ease-out;
+    }
+
+    .flash-overlay.is-flashing {
+      opacity: 1;
+    }
+
+    /* Controls Bar */
+    .controls-bar {
+      padding: 0.85rem;
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 0.5rem;
+      background: var(--card-bg);
+      border-top: 1px solid var(--border);
+    }
+
+    .btn {
+      padding: 0.75rem 1rem;
+      border-radius: 12px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      transition: transform 0.1s, opacity 0.2s, background-color 0.2s;
+    }
+
+    .btn:active {
+      transform: scale(0.97);
+    }
+
+    .btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: #fff;
+      box-shadow: 0 4px 16px var(--primary-glow);
+    }
+
+    .btn-danger {
+      background: rgba(239, 68, 68, 0.2);
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      color: #fca5a5;
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+
+    /* Close Overlay */
+    .close-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(9, 13, 22, 0.94);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+      animation: fadeIn 0.15s ease-out;
+    }
+
+    .close-modal {
+      width: 100%;
+      max-width: 360px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 2.2rem 1.75rem;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.85rem;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.6);
+    }
+
+    .close-icon {
+      font-size: 3.8rem;
+      color: var(--success);
+      margin-bottom: 0.25rem;
+      animation: scaleUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    @keyframes scaleUp {
+      from { transform: scale(0.6); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+
+    .close-title {
+      font-size: 1.3rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .close-code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: #38bdf8;
+      background: rgba(56, 189, 248, 0.12);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      padding: 0.45rem 1rem;
+      border-radius: 10px;
+      letter-spacing: 0.05em;
+    }
+
+    .close-desc {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    .footer-help {
+      text-align: center;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 0.5rem;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="app-container">
+    <!-- Error Banner -->
+    <div id="errorBanner" class="error-banner"></div>
+
+    <!-- Camera Viewport Card -->
+    <div class="viewport-card">
+      <div id="cameraViewport" class="camera-viewport">
+        <div id="cameraPlaceholder" class="camera-placeholder">
+          <i class="fa-solid fa-camera" style="font-size: 2.2rem; color: #475569;"></i>
+          <div>カメラを起動しています...</div>
+        </div>
+        <div id="cameraReticle" class="camera-reticle"></div>
+        <div id="cameraScanline" class="camera-scanline"></div>
+        <div id="scanStatusBadge" class="scan-status-badge">
+          <span class="pulse-dot"></span> バーコードを枠内に合わせてください
+        </div>
+        <div id="flashOverlay" class="flash-overlay"></div>
+      </div>
+
+      <!-- Controls -->
+      <div class="controls-bar">
+        <button id="btnStart" class="btn btn-primary">
+          <i class="fa-solid fa-play"></i> スキャン開始
+        </button>
+        <button id="btnStop" class="btn btn-danger" style="display: none;">
+          <i class="fa-solid fa-stop"></i> 停止
+        </button>
+        <button id="btnSwitchCamera" class="btn btn-secondary" title="カメラ切替（背面 / 前面）">
+          <i class="fa-solid fa-camera-rotate"></i> 切替
+        </button>
+        <button id="btnCloseTop" class="btn btn-secondary" title="画面を閉じる">
+          <i class="fa-solid fa-xmark"></i> 閉じる
+        </button>
+      </div>
+    </div>
+
+    <div class="footer-help">
+      ※バーコードを読み取った瞬間にデータを転送して自動で画面を閉じます。
+    </div>
+  </div>
+
+  <!-- 送信完了 & 自動クローズ用オーバーレイ -->
+  <div id="closeOverlay" class="close-overlay" style="display: none;">
+    <div class="close-modal">
+      <div class="close-icon"><i class="fa-solid fa-circle-check"></i></div>
+      <div class="close-title">データを転送しました</div>
+      <div id="closeCode" class="close-code">---</div>
+      <div class="close-desc">画面を閉じて元の画面に戻ります...</div>
+      <button type="button" id="btnManualClose" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem; padding: 0.85rem; font-size: 1rem;">
+        <i class="fa-solid fa-arrow-left"></i> 元の画面に戻る
+      </button>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      // ----------------------------------------------------
+      // URLパラメータの解析 (session, origin, mode)
+      // ----------------------------------------------------
+      const urlParams = new URLSearchParams(window.location.search);
+      const targetSessionId = urlParams.get('session') || null;
+      const targetOrigin = urlParams.get('origin') || null;
+      const scanMode = urlParams.get('mode') || 'picking';
+      const isQrMode = (scanMode === 'qr');
+
+      if (isQrMode) {
+        document.title = 'QRコードスキャナー';
+        const helpEl = document.querySelector('.footer-help');
+        if (helpEl) {
+          helpEl.textContent = '※QRコードを読み取った瞬間にデータを転送して自動で画面を閉じます。';
+        }
+      }
+
+      // DOM Elements
+      const dom = {
+        errorBanner: document.getElementById('errorBanner'),
+        viewport: document.getElementById('cameraViewport'),
+        placeholder: document.getElementById('cameraPlaceholder'),
+        reticle: document.getElementById('cameraReticle'),
+        scanline: document.getElementById('cameraScanline'),
+        scanStatusBadge: document.getElementById('scanStatusBadge'),
+        flash: document.getElementById('flashOverlay'),
+        btnStart: document.getElementById('btnStart'),
+        btnStop: document.getElementById('btnStop'),
+        btnSwitchCamera: document.getElementById('btnSwitchCamera'),
+        btnCloseTop: document.getElementById('btnCloseTop'),
+        closeOverlay: document.getElementById('closeOverlay'),
+        closeCode: document.getElementById('closeCode'),
+        btnManualClose: document.getElementById('btnManualClose')
+      };
+
+      // State
+      let isRunning = false;
+      let isInitializing = false;
+      let isBarcodeHandled = false;
+      let currentFacingMode = 'environment'; // 'environment' (背面) or 'user' (前面)
+      let liveStreamInstance = null;
+      let scanAnimationId = null;
+
+      // 誤読防止フィルター (2回連続一致で確定)
+      let candidateCode = null;
+      let candidateCount = 0;
+      let lastCandidateTime = 0;
+      const CONSISTENCY_THRESHOLD = 2; // 2回連続一致で確定
+      const CONSISTENCY_WINDOW_MS = 600; // 600ミリ秒以内の一致
+
+      // ----------------------------------------------------
+      // オーディオ (ビープ音) & バイブレーション
+      // ----------------------------------------------------
+      let audioCtx = null;
+      function playBeep() {
+        try {
+          if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          }
+          if (audioCtx.state === 'suspended') {
+            audioCtx.resume();
+          }
+          const osc = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(2200, audioCtx.currentTime);
+          gain.gain.setValueAtTime(0.25, audioCtx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.12);
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          osc.start();
+          osc.stop(audioCtx.currentTime + 0.12);
+        } catch(e) {}
+
+        if (navigator.vibrate) {
+          try { navigator.vibrate(60); } catch(e) {}
+        }
+      }
+
+      function flashSuccess() {
+        if (dom.flash) {
+          dom.flash.classList.add('is-flashing');
+          setTimeout(() => {
+            dom.flash.classList.remove('is-flashing');
+          }, 180);
+        }
+      }
+
+      function showError(msg) {
+        if (!msg) {
+          dom.errorBanner.style.display = 'none';
+          dom.errorBanner.textContent = '';
+        } else {
+          dom.errorBanner.style.display = 'block';
+          dom.errorBanner.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> ' + msg;
+        }
+      }
+
+      // ----------------------------------------------------
+      // カメラ & マルチエンジン高精度スキャナー起動
+      // ----------------------------------------------------
+      async function startScanner() {
+        if (isRunning || isInitializing) return;
+        isInitializing = true;
+        isBarcodeHandled = false;
+        candidateCode = null;
+        candidateCount = 0;
+        lastCandidateTime = 0;
+        showError('');
+        dom.btnStart.disabled = true;
+
+        try {
+          const constraints = {
+            video: {
+              facingMode: { ideal: currentFacingMode },
+              width: { min: 640, ideal: 1280, max: 1920 },
+              height: { min: 480, ideal: 720, max: 1080 }
+            },
+            audio: false
+          };
+
+          let stream = null;
+          try {
+            stream = await navigator.mediaDevices.getUserMedia(constraints);
+          } catch (err1) {
+            console.warn("Ideal constraints failed, fallback to basic:", err1);
+            stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+          }
+
+          liveStreamInstance = stream;
+
+          let videoEl = dom.viewport.querySelector('video');
+          if (!videoEl) {
+            videoEl = document.createElement('video');
+            dom.viewport.appendChild(videoEl);
+          }
+
+          videoEl.setAttribute('playsinline', 'true');
+          videoEl.setAttribute('webkit-playsinline', 'true');
+          videoEl.setAttribute('muted', 'true');
+          videoEl.muted = true;
+          videoEl.setAttribute('autoplay', 'true');
+          videoEl.style.width = '100%';
+          videoEl.style.height = '100%';
+          videoEl.style.position = 'absolute';
+          videoEl.style.top = '0';
+          videoEl.style.left = '0';
+          videoEl.style.objectFit = 'cover';
+          videoEl.style.zIndex = '1';
+          videoEl.srcObject = stream;
+
+          await new Promise((resolve) => {
+            videoEl.onloadedmetadata = () => {
+              videoEl.play().then(resolve).catch(resolve);
+            };
+            setTimeout(resolve, 1500);
+          });
+
+          // Canvasを非表示
+          const oldCanvas = dom.viewport.querySelector('canvas');
+          if (oldCanvas) {
+            oldCanvas.style.display = 'none';
+          }
+
+          isRunning = true;
+          isInitializing = false;
+          dom.btnStart.style.display = 'none';
+          dom.btnStop.style.display = 'inline-flex';
+          dom.placeholder.style.display = 'none';
+          dom.reticle.className = 'camera-reticle is-active' + (isQrMode ? ' is-qr' : '');
+          dom.scanline.classList.add('is-active');
+          if (dom.scanStatusBadge) {
+            dom.scanStatusBadge.innerHTML = isQrMode 
+              ? '<span class="pulse-dot"></span> QRコードを枠内に合わせてください'
+              : '<span class="pulse-dot"></span> バーコードを枠内に合わせてください';
+            dom.scanStatusBadge.style.display = 'inline-flex';
+          }
+
+          // 1. ネイティブ BarcodeDetector の初期化（最優先・高速ML）
+          let barcodeDetector = null;
+          if ('BarcodeDetector' in window) {
+            try {
+              const supported = await BarcodeDetector.getSupportedFormats();
+              const desiredFormats = isQrMode 
+                ? ['qr_code']
+                : ['ean_13', 'ean_8', 'code_128', 'code_39', 'upc_a', 'upc_e', 'itf'];
+              const validFormats = desiredFormats.filter(f => supported.includes(f));
+              if (validFormats.length > 0) {
+                barcodeDetector = new BarcodeDetector({ formats: validFormats });
+                console.log('BarcodeDetector active formats:', validFormats);
+              }
+            } catch (e) {
+              console.warn('BarcodeDetector format check error:', e);
+            }
+          }
+
+          // 2. ZXing MultiFormatReader の初期化（高精度・誤読ゼロ）
+          let zxingReader = null;
+          if (typeof ZXing !== 'undefined' && ZXing.MultiFormatReader) {
+            try {
+              const hints = new Map();
+              if (isQrMode) {
+                hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.QR_CODE]);
+              } else {
+                hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+                  ZXing.BarcodeFormat.EAN_13,
+                  ZXing.BarcodeFormat.EAN_8,
+                  ZXing.BarcodeFormat.CODE_128,
+                  ZXing.BarcodeFormat.CODE_39,
+                  ZXing.BarcodeFormat.UPC_A,
+                  ZXing.BarcodeFormat.UPC_E,
+                  ZXing.BarcodeFormat.ITF
+                ]);
+              }
+              hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+              zxingReader = new ZXing.MultiFormatReader();
+              zxingReader.setHints(hints);
+              console.log('ZXing MultiFormatReader initialized');
+            } catch (e) {
+              console.warn('ZXing init error:', e);
+            }
+          }
+
+          // スキャン用キャンバス（フル & 中央ROIクロップ）
+          const scanCanvas = document.createElement('canvas');
+          const scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true });
+          const cropCanvas = document.createElement('canvas');
+          const cropCtx = cropCanvas.getContext('2d', { willReadFrequently: true });
+
+          let isScanningFrame = false;
+
+          const scanFrame = async () => {
+            if (!isRunning || isBarcodeHandled) return;
+
+            if (videoEl.readyState >= videoEl.HAVE_CURRENT_DATA && videoEl.videoWidth > 0) {
+              if (!isScanningFrame) {
+                isScanningFrame = true;
+                try {
+                  let detectedCodes = [];
+
+                  // --- Engine 1: ネイティブ BarcodeDetector (最優先・高速ハードウェア支援) ---
+                  if (barcodeDetector) {
+                    try {
+                      const barcodes = await barcodeDetector.detect(videoEl);
+                      if (barcodes && barcodes.length > 0) {
+                        detectedCodes = barcodes.map(b => b.rawValue).filter(Boolean);
+                      }
+                    } catch (detErr) {
+                      console.warn('BarcodeDetector error, fallback to ZXing:', detErr);
+                    }
+                  }
+
+                  // --- Engine 2: ZXing (中央ROIクロップ優先、次にフル画面) ---
+                  if (detectedCodes.length === 0 && zxingReader) {
+                    const vw = videoEl.videoWidth;
+                    const vh = videoEl.videoHeight;
+
+                    // 中央レティクル領域 (ROI) を抽出（書籍の2段バーコード誤爆を防止）
+                    const rw = Math.floor(vw * (isQrMode ? 0.65 : 0.82));
+                    const rh = Math.floor(vh * (isQrMode ? 0.65 : 0.42));
+                    const rx = Math.floor((vw - rw) / 2);
+                    const ry = Math.floor((vh - rh) / 2);
+
+                    cropCanvas.width = rw;
+                    cropCanvas.height = rh;
+                    cropCtx.drawImage(videoEl, rx, ry, rw, rh, 0, 0, rw, rh);
+
+                    try {
+                      const lum = new ZXing.HTMLCanvasElementLuminanceSource(cropCanvas);
+                      const bin = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(lum));
+                      const res = zxingReader.decode(bin);
+                      if (res && res.getText()) {
+                        detectedCodes.push(res.getText());
+                      }
+                    } catch (cropErr) {
+                      // 中央枠で見つからない場合、フル画面も検査
+                      scanCanvas.width = vw;
+                      scanCanvas.height = vh;
+                      scanCtx.drawImage(videoEl, 0, 0, vw, vh);
+                      try {
+                        const lumFull = new ZXing.HTMLCanvasElementLuminanceSource(scanCanvas);
+                        const binFull = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(lumFull));
+                        const resFull = zxingReader.decode(binFull);
+                        if (resFull && resFull.getText()) {
+                          detectedCodes.push(resFull.getText());
+                        }
+                      } catch (fullErr) {}
+                    }
+                  }
+
+                  // 書籍2段バーコード対策: 下段(192...)を検知した場合、直上(ISBN 978...)の領域を自動追跡スキャン
+                  if (scanMode === 'item' && zxingReader && detectedCodes.some(c => String(c).trim().startsWith('192') && String(c).trim().length === 13)) {
+                    const vw = videoEl.videoWidth;
+                    const vh = videoEl.videoHeight;
+                    const rw = Math.floor(vw * 0.82);
+                    const rh = Math.floor(vh * 0.42);
+                    const rx = Math.floor((vw - rw) / 2);
+                    const upperY = Math.max(0, Math.floor((vh - rh) / 2) - Math.floor(rh * 0.65));
+                    const upperH = Math.min(vh - upperY, rh);
+
+                    cropCanvas.width = rw;
+                    cropCanvas.height = upperH;
+                    cropCtx.drawImage(videoEl, rx, upperY, rw, upperH, 0, 0, rw, upperH);
+
+                    try {
+                      const lumUp = new ZXing.HTMLCanvasElementLuminanceSource(cropCanvas);
+                      const binUp = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(lumUp));
+                      const resUp = zxingReader.decode(binUp);
+                      if (resUp && resUp.getText()) {
+                        detectedCodes.unshift(resUp.getText());
+                      }
+                    } catch (upErr) {}
+                  }
+
+                  // --- Engine 3: jsQR (QRモード時専用フォールバック) ---
+                  if (detectedCodes.length === 0 && isQrMode && typeof jsQR === 'function') {
+                    const vw = videoEl.videoWidth;
+                    const vh = videoEl.videoHeight;
+                    scanCanvas.width = vw;
+                    scanCanvas.height = vh;
+                    scanCtx.drawImage(videoEl, 0, 0, vw, vh);
+                    const imgData = scanCtx.getImageData(0, 0, vw, vh);
+                    const qrResult = jsQR(imgData.data, imgData.width, imgData.height, {
+                      inversionAttempts: "dontInvert"
+                    });
+                    if (qrResult && qrResult.data) {
+                      detectedCodes.push(qrResult.data);
+                    }
+                  }
+
+                  // 検出結果の判定と処理
+                  if (detectedCodes.length > 0 && !isBarcodeHandled) {
+                    processDetectedCodes(detectedCodes);
+                  }
+                } catch (scanErr) {
+                  console.warn('Scan frame error:', scanErr);
+                } finally {
+                  isScanningFrame = false;
+                }
+              }
+            }
+
+            if (isRunning && !isBarcodeHandled) {
+              scanAnimationId = requestAnimationFrame(scanFrame);
+            }
+          };
+
+          scanAnimationId = requestAnimationFrame(scanFrame);
+
+        } catch (err) {
+          isInitializing = false;
+          isRunning = false;
+          dom.btnStart.disabled = false;
+          handleCameraError(err);
+        }
+      }
+
+      // ----------------------------------------------------
+      // 検出バーコードの精査 & 2回一致確認フィルター
+      // ----------------------------------------------------
+      function processDetectedCodes(codes) {
+        if (isBarcodeHandled) return;
+
+        let selectedCode = null;
+
+        if (scanMode === 'item') {
+          // 書籍2段バーコードの特別処理:
+          // 複数コードが視界に入っている場合、ISBN (978〜 / 979〜) を最優先
+          const isbnCandidate = codes.find(c => {
+            const clean = String(c).trim();
+            return clean.length === 13 && (clean.startsWith('978') || clean.startsWith('979'));
+          });
+
+          if (isbnCandidate) {
+            selectedCode = isbnCandidate;
+          } else {
+            // ISBN以外の候補を検査（一般商品JAN 49/45〜 や Code 128）
+            const nonPriceCandidate = codes.find(c => {
+              const clean = String(c).trim();
+              return !(clean.length === 13 && clean.startsWith('192'));
+            });
+
+            if (nonPriceCandidate) {
+              selectedCode = nonPriceCandidate;
+            } else {
+              // 視界に192価格コードしか入っていない場合
+              if (dom.scanStatusBadge) {
+                dom.scanStatusBadge.innerHTML = '<span class="pulse-dot" style="background:#f59e0b;"></span> ⚠️ 書籍の下段（価格）です。上段（978〜）を合わせてください';
+                dom.scanStatusBadge.style.display = 'inline-flex';
+              }
+              // 価格コードは送信せずスキップして上段を待つ
+              return;
+            }
+          }
+        } else {
+          selectedCode = codes[0];
+        }
+
+        if (!selectedCode) return;
+        const code = String(selectedCode).trim();
+        if (code.length < 3) return;
+
+        // 誤読防止: 2回連続一致フィルター (CONSISTENCY_THRESHOLD = 2)
+        const now = Date.now();
+        if (candidateCode === code && (now - lastCandidateTime) <= CONSISTENCY_WINDOW_MS) {
+          candidateCount++;
+        } else {
+          candidateCode = code;
+          candidateCount = 1;
+        }
+        lastCandidateTime = now;
+
+        if (candidateCount >= CONSISTENCY_THRESHOLD) {
+          candidateCode = null;
+          candidateCount = 0;
+          isBarcodeHandled = true;
+          registerBarcode(code);
+        }
+      }
+
+      function stopScanner() {
+        if (!isRunning && !isInitializing) return;
+
+        if (scanAnimationId) {
+          cancelAnimationFrame(scanAnimationId);
+          scanAnimationId = null;
+        }
+
+        if (liveStreamInstance && liveStreamInstance.getTracks) {
+          liveStreamInstance.getTracks().forEach(t => {
+            try { t.stop(); } catch(e) {}
+          });
+        }
+        liveStreamInstance = null;
+
+        const videoEl = dom.viewport.querySelector('video');
+        if (videoEl) videoEl.srcObject = null;
+
+        isRunning = false;
+        isInitializing = false;
+        candidateCode = null;
+        candidateCount = 0;
+        dom.btnStart.style.display = 'inline-flex';
+        dom.btnStart.disabled = false;
+        dom.btnStop.style.display = 'none';
+        dom.placeholder.style.display = 'flex';
+        dom.reticle.className = 'camera-reticle';
+        dom.scanline.classList.remove('is-active');
+        if (dom.scanStatusBadge) dom.scanStatusBadge.style.display = 'none';
+      }
+
+      function handleCameraError(err) {
+        console.error('Camera Error:', err);
+        let msg = 'カメラの起動に失敗しました。';
+        if (err.name === 'NotAllowedError') {
+          msg = 'カメラのアクセス許可が拒否されています。ブラウザの設定からカメラへのアクセスを許可してください。';
+        } else if (err.name === 'NotFoundError') {
+          msg = '利用可能なカメラが見つかりませんでした。';
+        } else if (err.name === 'NotReadableError') {
+          msg = 'カメラが他のアプリで使用中です。終了して再試行してください。';
+        } else {
+          msg += ' (' + (err.message || err.name) + ')';
+        }
+        showError(msg);
+      }
+
+      function registerBarcode(code) {
+        // 読取完了音・フラッシュ
+        playBeep();
+        flashSuccess();
+
+        // 1. 直ちに親画面 (GAS) へデータを転送
+        sendToOpener([code], true);
+
+        // 2. カメラを即座に停止してハードウェアを解放
+        stopScanner();
+
+        // 3. 送信完了オーバーレイを表示
+        if (dom.closeCode) dom.closeCode.textContent = code;
+        if (dom.closeOverlay) dom.closeOverlay.style.display = 'flex';
+
+        // 4. 即座にウィンドウ（タブ）を閉じる (200ms)
+        setTimeout(() => {
+          try {
+            window.close();
+          } catch (e) {
+            console.warn('window.close error:', e);
+          }
+        }, 200);
+      }
+
+      // ----------------------------------------------------
+      // postMessage 送信ロジック
+      // ----------------------------------------------------
+      function sendToOpener(codesToSend, isFinalBatch) {
+        if (!window.opener || window.opener.closed) {
+          console.warn('window.opener is not available');
+          return false;
+        }
+
+        try {
+          const payload = {
+            type: 'BARCODE_SCAN_RESULT',
+            sessionId: targetSessionId,
+            mode: scanMode,
+            codes: codesToSend,
+            isFinalBatch: !!isFinalBatch,
+            timestamp: Date.now()
+          };
+
+          // GASのオリジンに関わらず確実に届けるため '*' を指定
+          window.opener.postMessage(payload, '*');
+          return true;
+        } catch (e) {
+          console.error('postMessage failed:', e);
+          return false;
+        }
+      }
+
+      // 親画面からの受信確認リスナー (ACK)
+      window.addEventListener('message', (event) => {
+        if (!event.data) return;
+        if (event.data.type === 'CONFIRM_RECEIVED' && event.data.sessionId === targetSessionId) {
+          // ACK received
+        }
+      });
+
+      // イベントリスナー登録
+      dom.btnStart.addEventListener('click', startScanner);
+      dom.btnStop.addEventListener('click', stopScanner);
+
+      dom.btnSwitchCamera.addEventListener('click', async () => {
+        currentFacingMode = (currentFacingMode === 'environment') ? 'user' : 'environment';
+        if (isRunning) {
+          stopScanner();
+          await startScanner();
+        }
+      });
+
+      if (dom.btnCloseTop) {
+        dom.btnCloseTop.addEventListener('click', () => {
+          stopScanner();
+          window.close();
+        });
+      }
+
+      if (dom.btnManualClose) {
+        dom.btnManualClose.addEventListener('click', () => {
+          window.close();
+        });
+      }
+
+      if (dom.closeOverlay) {
+        dom.closeOverlay.addEventListener('click', () => {
+          window.close();
+        });
+      }
+
+      // 画面表示時に自動でカメラ起動
+      const initCameraAuto = () => {
+        setTimeout(startScanner, 200);
+      };
+      if (document.readyState === 'complete' || document.readyState === 'interactive') {
+        initCameraAuto();
+      } else {
+        window.addEventListener('DOMContentLoaded', initCameraAuto);
+      }
+
+      // バックグラウンド離脱時の安全停止
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden && isRunning) {
+          stopScanner();
+        }
+      });
+
+      // 画面終了時のリソース解放
+      window.addEventListener('pagehide', stopScanner);
+      window.addEventListener('beforeunload', stopScanner);
+
+    })();
+  </script>
+</body>
+</html>
